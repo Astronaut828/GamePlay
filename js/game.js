@@ -1,86 +1,57 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 
 class Game {
-    loadPlayer() {
-        const loadingManager = new THREE.LoadingManager();
-        loadingManager.onProgress = (url, loaded, total) => {
-            console.log(`Loading: ${(loaded / total) * 100}%`);
-        };
-
-        this.loader = new GLTFLoader(loadingManager);
-
-        // Create temporary cube while model loads
-        const tempGeometry = new THREE.BoxGeometry(1, 1, 1);
-        const tempMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-        this.player = new THREE.Mesh(tempGeometry, tempMaterial);
-        this.player.position.y = 0.5;
-        this.scene.add(this.player);
-
-        // Load the sports car model
-        this.loader.load(
-            "https://raw.githubusercontent.com/pmndrs/drei-assets/master/vehicles/McLaren.glb",
-            (gltf) => {
-                console.log("Car loaded successfully!");
-
-                // Remove the temporary cube
-                this.scene.remove(this.player);
-
-                // Set up the car model
-                this.player = gltf.scene;
-
-                // Adjust the car's scale and position
-                this.player.scale.set(0.7, 0.7, 0.7);
-                this.player.position.set(0, 0.3, 0);
-
-                // Rotate to face forward
-                this.player.rotation.y = Math.PI;
-
-                // Add the car to the scene
-                this.scene.add(this.player);
-
-                // Add car shadow
-                this.player.traverse((child) => {
-                    if (child.isMesh) {
-                        child.castShadow = true;
-                        child.receiveShadow = true;
-                    }
-                });
-
-                // Adjust camera for better car view
-                this.camera.position.set(0, 3, 8);
-                this.camera.lookAt(this.player.position);
-            },
-            (progress) => {
-                console.log(
-                    "Loading progress:",
-                    (progress.loaded / progress.total) * 100 + "%"
-                );
-            },
-            (error) => {
-                console.error("Error loading car:", error);
-                // Keep the red cube as fallback
-                console.log("Using fallback cube instead");
-            }
-        );
-    }
-
     constructor() {
-        // Scene setup
         this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(0x87ceeb); // Sky blue background
+        this.scene.background = new THREE.Color(0x87ceeb);
         this.camera = new THREE.PerspectiveCamera(
             75,
             window.innerWidth / window.innerHeight,
             0.1,
             1000
         );
+        this.camera.position.set(0, 5, 10);
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.shadowMap.enabled = true;
         document.body.appendChild(this.renderer.domElement);
 
-        // Add better lighting
+        // Lighting
+        this.setupLights();
+
+        // Create floor
+        this.setupFloor();
+
+        // Load player (car)
+        this.setupPlayer();
+
+        // Setup controls
+        this.speed = 0.1;
+        this.isJumping = false;
+        this.jumpForce = 0;
+        this.gravity = 0.005;
+        this.jumpHeight = 0.15;
+        this.keys = {
+            ArrowUp: false,
+            ArrowDown: false,
+            ArrowLeft: false,
+            ArrowRight: false,
+            " ": false, // Space bar for jumping
+        };
+        this.setupEventListeners();
+
+        // Add only flying parameters
+        this.isFlying = false;
+        this.flyingSpeed = 0.1;
+        this.fallSpeed = 0.15;
+        this.wasMoving = false;
+
+        this.animate();
+    }
+
+    setupLights() {
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
         this.scene.add(ambientLight);
 
@@ -88,42 +59,12 @@ class Game {
         directionalLight.position.set(10, 10, 10);
         directionalLight.castShadow = true;
         this.scene.add(directionalLight);
-
-        // Improve shadow quality
-        directionalLight.shadow.mapSize.width = 2048;
-        directionalLight.shadow.mapSize.height = 2048;
-
-        // Game objects
-        this.createFloor();
-        this.loadPlayer();
-
-        // Controls
-        this.speed = 0.15; // Adjusted for the sports car
-        this.keys = {
-            ArrowUp: false,
-            ArrowDown: false,
-            ArrowLeft: false,
-            ArrowRight: false,
-        };
-
-        this.setupEventListeners();
-        this.animate();
     }
 
-    createFloor() {
-        // Create a more realistic floor with asphalt texture
+    setupFloor() {
         const floorGeometry = new THREE.PlaneGeometry(100, 100);
-        const textureLoader = new THREE.TextureLoader();
-
-        // Load asphalt texture
-        const floorTexture = textureLoader.load(
-            "https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/terrain/grasslight-big.jpg"
-        );
-        floorTexture.wrapS = floorTexture.wrapT = THREE.RepeatWrapping;
-        floorTexture.repeat.set(10, 10);
-
         const floorMaterial = new THREE.MeshStandardMaterial({
-            map: floorTexture,
+            color: 0x404040,
             roughness: 0.8,
             metalness: 0.2,
             side: THREE.DoubleSide,
@@ -133,6 +74,75 @@ class Game {
         this.floor.rotation.x = -Math.PI / 2;
         this.floor.receiveShadow = true;
         this.scene.add(this.floor);
+
+        // Add grid helper
+        const grid = new THREE.GridHelper(100, 40, 0x000000, 0x444444);
+        grid.position.y = 0.01;
+        this.scene.add(grid);
+    }
+
+    setupPlayer() {
+        const loader = new GLTFLoader();
+
+        loader.load(
+            "https://threejs.org/examples/models/gltf/Soldier.glb",
+            (gltf) => {
+                this.player = gltf.scene;
+                this.player.scale.set(1, 1, 1);
+                this.player.position.set(0, 0, 0);
+                this.scene.add(this.player);
+
+                // Setup animation mixer
+                this.mixer = new THREE.AnimationMixer(this.player);
+                this.animations = {};
+
+                // Store original animations
+                gltf.animations.forEach((clip) => {
+                    this.animations[clip.name] = this.mixer.clipAction(clip);
+                });
+
+                // Create custom jump animation
+                const jumpTrack = new THREE.NumberKeyframeTrack(
+                    ".position[y]", // property to animate
+                    [0, 0.5, 1], // keyframe times
+                    [0, 1.5, 0], // values at each keyframe
+                    THREE.InterpolateSmooth // interpolation type
+                );
+
+                // Create the jump animation clip
+                this.jumpClip = new THREE.AnimationClip("Jump", 1, [jumpTrack]);
+                this.animations["Jump"] = this.mixer.clipAction(this.jumpClip);
+                this.animations["Jump"].setLoop(THREE.LoopOnce);
+                this.animations["Jump"].clampWhenFinished = true;
+
+                // Start with idle animation
+                this.currentAction = this.animations["Idle"];
+                this.currentAction.play();
+
+                // Add shadows
+                this.player.traverse((child) => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                    }
+                });
+            }
+        );
+    }
+
+    updateCameraPosition() {
+        if (!this.player) return;
+
+        // Position camera behind player
+        const cameraOffset = new THREE.Vector3(0, 2, 4);
+        const playerPosition = this.player.position.clone();
+
+        // Add height offset for jump
+        playerPosition.y += 1;
+
+        // Calculate camera position
+        this.camera.position.copy(playerPosition).add(cameraOffset);
+        this.camera.lookAt(playerPosition);
     }
 
     setupEventListeners() {
@@ -157,47 +167,139 @@ class Game {
     }
 
     movePlayer() {
-        if (!this.player) return;
+        if (!this.player || !this.mixer) return;
 
         const moveDistance = this.speed;
-        const rotationSpeed = 0.03;
+        let isMoving = false;
 
+        // Check movement
         if (this.keys.ArrowUp) {
-            this.player.position.x +=
-                Math.cos(this.player.rotation.y) * moveDistance;
-            this.player.position.z +=
-                Math.sin(this.player.rotation.y) * moveDistance;
+            this.player.position.z -= moveDistance;
+            this.player.rotation.y = 0;
+            isMoving = true;
         }
         if (this.keys.ArrowDown) {
-            this.player.position.x -=
-                Math.cos(this.player.rotation.y) * moveDistance * 0.5;
-            this.player.position.z -=
-                Math.sin(this.player.rotation.y) * moveDistance * 0.5;
+            this.player.position.z += moveDistance;
+            this.player.rotation.y = Math.PI;
+            isMoving = true;
         }
         if (this.keys.ArrowLeft) {
-            this.player.rotation.y += rotationSpeed;
+            this.player.position.x -= moveDistance;
+            this.player.rotation.y = Math.PI / 2;
+            isMoving = true;
         }
         if (this.keys.ArrowRight) {
-            this.player.rotation.y -= rotationSpeed;
+            this.player.position.x += moveDistance;
+            this.player.rotation.y = -Math.PI / 2;
+            isMoving = true;
         }
 
-        // Update camera to follow car
-        const cameraOffset = new THREE.Vector3(0, 3, 8);
-        cameraOffset.applyAxisAngle(
-            new THREE.Vector3(0, 1, 0),
-            this.player.rotation.y
-        );
-        this.camera.position.copy(this.player.position).add(cameraOffset);
-        this.camera.lookAt(this.player.position);
+        // Store current movement state
+        this.wasMoving = isMoving;
+
+        // Flying and landing logic
+        if (this.keys[" "]) {
+            // Flying up
+            this.player.position.y += this.flyingSpeed;
+            this.playAnimation("Jump");
+            this.isFlying = true;
+        } else {
+            if (this.player.position.y > 0) {
+                // Falling
+                this.player.position.y -= this.fallSpeed;
+                this.playAnimation("Jump");
+
+                // Check for landing
+                if (this.player.position.y <= 0) {
+                    this.player.position.y = 0;
+                    this.isFlying = false;
+
+                    // Force animation change on landing
+                    if (isMoving) {
+                        this.forceAnimation("Run");
+                    } else {
+                        this.forceAnimation("Idle");
+                    }
+                }
+            } else {
+                // On ground
+                if (this.isFlying) {
+                    // Just landed
+                    this.isFlying = false;
+                    if (isMoving) {
+                        this.forceAnimation("Run");
+                    } else {
+                        this.forceAnimation("Idle");
+                    }
+                } else {
+                    // Normal ground movement
+                    if (isMoving) {
+                        this.playAnimation("Run");
+                    } else {
+                        this.playAnimation("Idle");
+                    }
+                }
+            }
+        }
+
+        this.updateCameraPosition();
+    }
+
+    // Add a new method to force animation change
+    forceAnimation(name) {
+        if (!this.animations[name]) return;
+
+        if (this.currentAction) {
+            this.currentAction.stop();
+        }
+
+        const nextAction = this.animations[name];
+        nextAction
+            .reset()
+            .setEffectiveTimeScale(1)
+            .setEffectiveWeight(1)
+            .play();
+
+        this.currentAction = nextAction;
+    }
+
+    // Regular animation transitions
+    playAnimation(name) {
+        if (
+            !this.animations[name] ||
+            this.currentAction === this.animations[name]
+        )
+            return;
+
+        const nextAction = this.animations[name];
+        const duration = 0.15;
+
+        if (this.currentAction) {
+            this.currentAction.fadeOut(duration);
+        }
+
+        nextAction
+            .reset()
+            .setEffectiveTimeScale(1)
+            .setEffectiveWeight(1)
+            .fadeIn(duration)
+            .play();
+
+        this.currentAction = nextAction;
     }
 
     animate() {
-        requestAnimationFrame(this.animate.bind(this));
+        requestAnimationFrame(() => this.animate());
+
+        const deltaTime = 0.016;
+
+        if (this.mixer) {
+            this.mixer.update(deltaTime);
+        }
 
         this.movePlayer();
         this.renderer.render(this.scene, this.camera);
     }
 }
 
-// Start the game
 new Game();
