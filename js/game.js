@@ -4,7 +4,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 class Game {
     constructor() {
         this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(0x87ceeb);
+        this.scene.background = new THREE.Color(0x1d1d1d);
         this.camera = new THREE.PerspectiveCamera(
             75,
             window.innerWidth / window.innerHeight,
@@ -28,9 +28,9 @@ class Game {
 
         // Setup player and controls last
         this.isFlying = false;
-        this.flyingSpeed = 0.1;
-        this.fallSpeed = 0.15;
-        this.speed = 0.1;
+        this.flyingSpeed = 0.15;
+        this.fallSpeed = 0.2;
+        this.speed = 0.12;
         this.keys = {
             ArrowUp: false,
             ArrowDown: false,
@@ -76,8 +76,10 @@ class Game {
         const floorMaterial = new THREE.MeshStandardMaterial({
             color: 0x808080, // Concrete gray
             roughness: 0.9, // Very rough for concrete look
-            metalness: 0.1, // Low metalness
+            metalness: 1, // Low metalness
             side: THREE.DoubleSide,
+            bumpScale: 0.9, // Adjust bump intensity
+            displacementScale: 0.5, // Adjust displacement amount
         });
 
         this.floor = new THREE.Mesh(floorGeometry, floorMaterial);
@@ -142,7 +144,7 @@ class Game {
         const cameraOffset = new THREE.Vector3(
             0, // X offset (left/right)
             4, // Y offset (height) - increased for better view
-            6 // Z offset (distance behind player)
+            7 // Z offset (distance behind player)
         );
 
         // Position camera behind player
@@ -216,42 +218,54 @@ class Game {
 
     movePlayer() {
         if (!this.player || !this.mixer) return;
-
+    
         const moveDistance = this.speed;
         let isMoving = false;
-
-        // Store current position before movement
+    
+        // 1. Gather input for horizontal (X) and vertical (Z) movement
+        let inputX = 0; // left/right
+        let inputZ = 0; // up/down
+    
+        if (this.keys.ArrowUp)    inputZ -= 1;
+        if (this.keys.ArrowDown)  inputZ += 1;
+        if (this.keys.ArrowLeft)  inputX -= 1;
+        if (this.keys.ArrowRight) inputX += 1;
+    
+        // 2. Normalize the input vector so diagonal movement isn’t faster
+        const length = Math.sqrt(inputX * inputX + inputZ * inputZ);
+        if (length > 0) {
+            inputX /= length;
+            inputZ /= length;
+            isMoving = true;
+        }
+    
+        // 3. Compute the new position based on the movement vector
         const currentPosition = this.player.position.clone();
         const newPosition = currentPosition.clone();
-
-        // Check movement with collision
-        if (this.keys.ArrowUp) {
-            newPosition.z -= moveDistance;
-            this.player.rotation.y = 0;
-            isMoving = true;
+    
+        newPosition.x += moveDistance * inputX;
+        newPosition.z += moveDistance * inputZ;
+    
+        // 4. Determine the character’s facing angle based on inputX, inputZ
+        //    This math aligns with your existing orientation:
+        //    - Up arrow => rotation.y = 0
+        //    - Right arrow => rotation.y = -π/2
+        //    - Down arrow => rotation.y = π
+        //    - Left arrow => rotation.y = π/2
+        //    Pressing diagonals results in intermediate angles.
+        if (isMoving) {
+            // Angle is derived from the 2D vector (inputX, inputZ).
+            // We use -Math.atan2() to match your existing arrow key orientation.
+            const angle = -Math.atan2(inputX, -inputZ);
+            this.player.rotation.y = angle;
         }
-        if (this.keys.ArrowDown) {
-            newPosition.z += moveDistance;
-            this.player.rotation.y = Math.PI;
-            isMoving = true;
-        }
-        if (this.keys.ArrowLeft) {
-            newPosition.x -= moveDistance;
-            this.player.rotation.y = Math.PI / 2;
-            isMoving = true;
-        }
-        if (this.keys.ArrowRight) {
-            newPosition.x += moveDistance;
-            this.player.rotation.y = -Math.PI / 2;
-            isMoving = true;
-        }
-
-        // Check for collision before applying movement
+    
+        // 5. Check for collisions before applying movement
         if (isMoving && !this.checkBuildingCollision(newPosition)) {
             this.player.position.copy(newPosition);
         }
-
-        // Flying and landing logic
+    
+        // 6. Flying/jump logic remains the same
         if (this.keys[" "]) {
             // Flying up
             this.player.position.y += this.flyingSpeed;
@@ -262,12 +276,12 @@ class Game {
                 // Falling
                 this.player.position.y -= this.fallSpeed;
                 this.playAnimation("Jump");
-
+    
                 // Check for landing
                 if (this.player.position.y <= 0) {
                     this.player.position.y = 0;
                     this.isFlying = false;
-
+    
                     // Force animation change on landing
                     if (isMoving) {
                         this.forceAnimation("Run");
@@ -295,9 +309,11 @@ class Game {
                 }
             }
         }
-
+    
+        // 7. Update camera after movement
         this.updateCameraPosition();
     }
+    
 
     // Add a new method to force animation change
     forceAnimation(name) {
@@ -352,12 +368,6 @@ class Game {
         }
 
         this.movePlayer();
-
-        // Log building position for debugging
-        if (this.building) {
-            console.log("Building position:", this.building.position);
-        }
-
         this.renderer.render(this.scene, this.camera);
     }
 
@@ -404,9 +414,7 @@ class Game {
 
         // Add sign with larger dimensions (30% bigger)
         const signGeometry = new THREE.PlaneGeometry(5.2, 2.6); // Increased from 4, 2
-        const signTexture = new THREE.TextureLoader().load(
-            "/public/DarkSun.png"
-        );
+        const signTexture = new THREE.TextureLoader().load("./DarkSun.png");
         const signMaterial = new THREE.MeshBasicMaterial({
             map: signTexture,
             transparent: true,
@@ -416,8 +424,6 @@ class Game {
         const sign = new THREE.Mesh(signGeometry, signMaterial);
         sign.position.set(-45, 6.5, -39.9); // Slightly higher to account for larger size
         this.scene.add(sign);
-
-        console.log("Building added to scene"); // Debug log
     }
 }
 
