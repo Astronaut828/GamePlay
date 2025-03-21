@@ -414,7 +414,7 @@ class Game {
 
         // Add sign with larger dimensions (30% bigger)
         const signGeometry = new THREE.PlaneGeometry(5.2, 2.6); // Increased from 4, 2
-        const signTexture = new THREE.TextureLoader().load("./DarkSun.png");
+        const signTexture = new THREE.TextureLoader().load("./theCut.png");
         const signMaterial = new THREE.MeshBasicMaterial({
             map: signTexture,
             transparent: true,
